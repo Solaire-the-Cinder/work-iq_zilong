@@ -1,6 +1,6 @@
 ---
 name: workiq
-description: WorkIQ tools for Microsoft 365 workplace data and actions. Use for email, calendar events and meetings, files, SharePoint, OneDrive, Teams, people, Planner, and other M365 requests. Triggers include cancel meeting or event, accept or decline meetings, create or update events, create an upload session or replace an existing OneDrive file, find or summarize workplace content, send or reply to mail, manage or download files, manage tasks, and discover M365 paths or schemas. Prefer `ask` for synthesis and structured entity tools for exact reads, writes, and binary downloads with `fetch_blob`.
+description: WorkIQ tools for Microsoft 365 workplace data and actions. Use for email, calendar events and meetings, files, SharePoint, OneDrive, Teams, people, Planner, and other M365 requests. Triggers include cancel meeting or event, accept or decline meetings, create or update events, create an upload session or replace an existing OneDrive file, find or summarize workplace content, send or reply to mail, manage or download files, manage tasks, read SharePoint library metadata or columns, filter/count/group/sort files by metadata, and discover M365 paths or schemas. Prefer `ask` for synthesis and structured entity tools for exact reads, writes, SharePoint library metadata, and binary downloads with `fetch_blob`.
 compatibility: >
   Uses the hosted WorkIQ MCP endpoint. No local package is required for MCP
   tool calls.
@@ -41,6 +41,7 @@ See [Resolving tool names in your host](#resolving-tool-names-in-your-host) belo
 | Synthesizing Teams chat activity | "What's the team's take on the release?" | `ask` |
 | Finding documents by topic | "Where is the design doc for Project X?" | `ask` |
 | Colleague expertise or ownership | "Who owns the billing system?" | `ask` |
+| Reading, filtering, counting, grouping, or sorting files by SharePoint library columns | "Which documents have Owner = HR Team?", "Count files by Status" | `fetch` on `/sites/{siteId}/lists/{listId}/items?$expand=fields` — never `ask` alone; see `references/sharepoint-library-metadata.md` |
 | Organizational context / goals | "What are the team's Q1 goals?" | `ask` |
 | Project status or updates | "What's the status of Project X?" | `ask` |
 | Open-ended "any updates" / catch-up questions | "Any updates I should know about?" | `ask` |
@@ -79,7 +80,7 @@ See [Resolving tool names in your host](#resolving-tool-names-in-your-host) belo
 | Summarizing a numbered section in an exact named technical specification | "Find this exact technical spec, identify its owner and latest numbered section, then summarize that section" | Use `ask` exactly once with the exact filename in the question so enterprise search can ground both file metadata and the semantic section summary. Do not pre-resolve with `call_function`, pass `fileUrls`, call `fetch_blob`, or make follow-up entity calls. This semantic-summary pattern is an exception to the named-file metadata route. |
 | Reading the first accessible SharePoint site's default drive or lists | "Show the first site's drive metadata", "List the first site's lists" | `fetch` `/sites?search=*&$select=id,displayName,name,webUrl&$top=1`, treat the first returned item as "first accessible", then `fetch` `/sites/{siteId}/drive` or `/sites/{siteId}/lists`. The parameter is `search=*`, **not** `$search=*`; do not use `ask`, guessed search terms, or an empty search. See `references/sharepoint-work-iq.md`. |
 | Finding a named group-backed SharePoint site's metadata | "Find the Contoso Research SharePoint site and return its exact display name and URL" | Use exactly two `fetch` calls: first resolve the backing group with `/groups?$filter=displayName%20eq%20'{odataEscapedAndUrlEncodedSiteName}'&$select=id,displayName&$top=1`, then fetch `/groups/{groupId}/drive?$select=id,webUrl,sharePointIds`. Return the group's exact `displayName` and `sharePointIds.siteUrl`. Do not call `/groups/{groupId}/sites/root`, `search_paths`, broaden into `/sites?search` retries, infer the site URL, or fetch the site again. If `sharePointIds.siteUrl` is absent, report that limitation. |
-| Listing documents from a named group-backed SharePoint team site | "List documents from the Contoso Research SharePoint team site" | Resolve the backing group by the user's complete, exact site display name: `fetch` `/groups?$filter=displayName%20eq%20'{odataEscapedAndUrlEncodedSiteName}'&$select=id,displayName&$top=1` (do not remove prefix words from the supplied name). Then use exactly `fetch` `/groups/{groupId}/drive?$expand=root` without adding `$select` or nested-expand variants. Copy the returned drive `id` and `root.id` verbatim, then call exactly `fetch` `/drives/{driveId}/items/{rootId}/children?$select=id,name,webUrl,file,folder,parentReference&$top=5`. Do not use `/root/children`, Microsoft Search, `search_paths`, list/listItem fallbacks, or malformed-id retries. Use this for named Microsoft 365 group-backed team sites, especially when site search fails or the name contains characters that OData `$search` rejects. See `references/sharepoint-work-iq.md`. |
+| Listing documents from a named group-backed SharePoint team site | "List documents from the Contoso Research SharePoint team site" | Resolve the backing group by the user's complete, exact site display name: `fetch` `/groups?$filter=displayName%20eq%20'{odataEscapedAndUrlEncodedSiteName}'&$select=id,displayName&$top=1` (do not remove prefix words from the supplied name). Then use exactly `fetch` `/groups/{groupId}/drive?$expand=root` without adding `$select` or nested-expand variants. Copy the returned drive `id` and `root.id` verbatim, then call exactly `fetch` `/drives/{driveId}/items/{rootId}/children?$select=id,name,webUrl,file,folder,parentReference&$top=5`. For this basic drive-item listing workflow, do not use `/root/children`, Microsoft Search, `search_paths`, list/listItem fallbacks, or malformed-id retries. The no-list-fallback rule does not apply when the user requests SharePoint library columns or metadata filtering/aggregation; use the metadata route above for those requests. Use this workflow for named Microsoft 365 group-backed team sites, especially when site search fails or the name contains characters that OData `$search` rejects. See `references/sharepoint-work-iq.md`. |
 | Downloading an explicitly requested SharePoint site-page file | "Download the named .aspx page from a named site-page library" | Use exactly six calls. Resolve the backing group by the complete exact site name; fetch `/groups/{groupId}/drive?$select=id,webUrl,sharePointIds`; fetch `/sites/{sharePointIds.siteId}/lists?$filter=displayName%20eq%20'{odataEscapedAndUrlEncodedLibraryName}'&$select=id,displayName,webUrl,list&$top=10`; fetch `/sites/{siteId}/lists/{listId}/items?$select=id,webUrl&$expand=fields($select=FileLeafRef,Title)&$top=50` and select the exact requested filename; fetch `/sites/{siteId}/lists/{listId}/items/{itemId}/driveItem?$select=id,name,webUrl,parentReference,file,size`; then `fetch_blob` `/drives/{parentReference.driveId}/items/{driveItemId}/content`. For the download item segment, use `driveItem.id`, not the list item id, and insert the complete structured-response value without retyping, shortening, normalizing, or reconstructing it. Before the single `fetch_blob` call, compare that item segment character-for-character with `driveItem.id` and correct any mismatch before calling rather than retrying after failure. Copy every other returned id verbatim. Do not use site search, `/sites/{id}/drives`, root-children guesses, Microsoft Search, `search_paths`, or download-path retries. |
 | Searching or downloading documents across SharePoint team sites | "Find a SharePoint document and download its raw content", "List documents from SharePoint team sites" | `do_action` `/search/query` for `driveItem` documents, choose a file document (not a folder, home page, SitePages entry, or another `.aspx` page unless explicitly requested), then call `fetch_blob` `/drives/{driveId}/items/{itemId}/content` when raw bytes are requested. Return exact file name, site display name when required, and `webUrl`; see `references/sharepoint-work-iq.md` and `references/do-action-work-iq.md`. |
 | Listing all recent documents in one SharePoint site | "List every document modified in one site since a date; include editor and date" | Call `do_action` `/search/query` exactly once. Use a `driveItem` query combining the exact team-site `path`, `IsDocument=true`, and `lastModifiedTime>=YYYY-MM-DD`; set `size` to `500` (the deployed maximum; `501` is rejected), and request `name`, `webUrl`, `lastModifiedDateTime`, `lastModifiedBy`, `createdBy`, and `parentReference`. Do not probe a larger size or retry. Search may return duplicate hits for one driveItem: de-duplicate by driveItem identity or `webUrl`, state raw-hit and unique-document counts separately, and list each unique document exactly once. |
@@ -256,6 +257,181 @@ Entity tools provide **fast, direct access to specific M365 data** via Work IQ A
 
 **Recommended workflow:** for **well-known paths, go direct** — call the read/write tool immediately (use the cheat sheet below). Only fall back to `search_paths` → `get_schema` → tool when the path is genuinely unknown or a write body shape is unfamiliar. Do **not** reflexively run `search_paths`/`get_schema` before every common operation.
 
+### 🛑 SharePoint document-library metadata
+
+`ask` and KnowledgeSearch are grounded in document content and embedded file
+properties. They cannot reliably read SharePoint list columns. A PDF may say
+`Document Owner: Sofia Ricci` while its library column says `Owner = HR Team`;
+only the list-item `fields` value answers a library-metadata question.
+
+**OOB-first routing rule:** preserve the OOB 0817 workflow unless the user
+explicitly asks about a SharePoint document-library column or metadata
+attribute, or asks to filter, count, group, sort, find earliest/latest, or
+otherwise compare files by one. Only for those explicit metadata requests, use
+`fetch` on SharePoint list items.
+Typical triggers include Owner, Status, City, State, Region, Classification,
+Document Type, Review Date, Department, Category, and custom columns.
+
+- ❌ `ask("Which documents have Owner = Project Team B?")`
+- ✅ `fetch` the library columns and
+  `/sites/{siteId}/lists/{listId}/items?$expand=fields&$top=100`, then filter
+  on the returned `fields` values.
+
+The OOB semantic-owner workflow remains authoritative by default, including
+when "owner" is part of an exact technical-spec content-summary request. Use
+the structured metadata route only when the user explicitly asks for the
+library `Owner` column, library metadata, or filtering/counting/grouping/
+sorting/comparison by Owner. If both are explicitly requested, fetch the
+library Owner field first and then use `ask` only for the content summary.
+
+`ask` may supplement a metadata answer by summarizing the content of files
+already identified structurally. It must never be the sole source for a
+library-column claim.
+
+`knowledge_search_*` and `ask` return document **text**, never list-column
+metadata. A question about who owns, when reviewed, what status, which
+department, how many, or any column value **cannot** be answered from their
+results, no matter how many times you call them — go to
+`/sites/{siteId}/lists/{listId}/items`. Never decline a metadata question
+because a knowledge search found nothing: that is evidence the wrong tool was
+used, not that the data is absent.
+
+#### Canonical metadata workflow
+
+Given `https://contoso.sharepoint.com/sites/{siteName}/Shared%20Documents`:
+
+1. Resolve the composite site id once:
+   `/sites/contoso.sharepoint.com:/sites/{siteName}`.
+2. Resolve the document library list id once:
+   `/sites/{siteId}/lists?$select=id,name,displayName`.
+3. Read its columns once:
+   `/sites/{siteId}/lists/{listId}/columns?$select=name,displayName,indexed,hidden`.
+4. Read list items with their fields:
+   `/sites/{siteId}/lists/{listId}/items?$expand=fields&$top=100`.
+
+Reuse the site id, list id, and column map for the rest of the conversation.
+Do not repeatedly rediscover them.
+
+#### Metadata grounding and schema rules
+
+- Every metadata value reported for an item must literally appear in a tool
+  result for that item. A filename, path, URL, or related field is not evidence
+  for the requested column.
+- **`/columns` is authoritative for what the library carries.** GET
+  `/sites/{siteId}/lists/{listId}/columns` before answering about any property.
+  If the property is not in that set, no amount of further retrieval will
+  produce it.
+- **Absent-field protocol.** If the requested property is absent from
+  `/columns`, or present but empty for every item you examined, your answer
+  MUST: (1) state plainly in the first sentence that the library does not carry
+  it — e.g. "This library does not store sensitivity labels; the `_DisplayName`
+  column is empty for all governed documents."; (2) contain **no** per-file
+  table for that property, not even one illustrative row; (3) name the closest
+  columns that DO exist, labelled as different data, and ask whether the user
+  wants those instead. Stop retrieving once `/columns` has been checked — do not
+  keep searching for a field that is not there.
+- **Never substitute or relabel one field for another.** `Modified` /
+  `Modified By` is not checkout state or review activity; `publication.level` is
+  not a sensitivity label; `Created` / `Created By` is not an approval record; a
+  date column is not a view or access count. Do not invent file names, owners,
+  or values as "examples" — if you must show shape, use a row you actually
+  retrieved and name the item.
+- Match the user's display name to the column's internal `name` before using
+  `fields/<name>`. Internal names may encode spaces or characters, such as
+  `Review Date` stored as `Review_x0020_Date`.
+- If `$filter` or `$orderby` says a field is not indexed, drop the server-side
+  operation, enumerate with `$expand=fields`, and filter/sort/count/group
+  client-side. Do not retry cosmetic query variants or fall back to `ask`.
+- A failed call is neither an empty result nor an empty field. Report
+  `could not read (call failed)` rather than claiming no files or no value.
+
+#### Scope and denominator
+
+This kind of library often holds two populations. State which one you are
+counting every time you give a count or a percentage:
+
+- **GOVERNED** — items that carry the metadata columns (Owner, Department,
+  Review Date, Status, …). Metadata questions are about these.
+- **UNGOVERNED** — items with no metadata columns populated at all.
+
+Establish the governed total once per turn before answering
+(`/items?$expand=fields&$filter=fields/Owner ne null`) and quote it: "Of the N
+governed documents, …". Unless the user says "the whole library" or "including
+unclassified", scope metadata questions to GOVERNED. Never merge "field is empty
+for a governed item" (a real gap — report it) with "item is ungoverned" (not a
+gap). Every percentage names its denominator in the same sentence.
+
+#### Enumerating a library, truncation, and per-result status
+
+The gateway silently caps every page at 100 rows and **always rejects**
+`$skiptoken` (IcM 849663009). Several standard techniques are dead here — do not
+spend calls on them. Each of these is blocked and cannot be made to work by
+rewording:
+
+- `$filter=id gt 'N'` → HTTP 500; `$filter=fields/ID gt N` → HTTP 400;
+  `@odata.nextLink` (carries `$skiptoken`) → HTTP 400; `$count=true` → HTTP 400.
+
+If you see one of these, the shape is unsupported — do not retry it with
+different quoting, casing, or ordering. Enumerate in this order instead:
+
+1. **Filtered query** (preferred whenever the question has a filter):
+   `/items?$expand=fields&$filter=fields/{Col} eq '{Value}'&$top=100`. A result
+   under 100 rows with no `@odata.nextLink` is COMPLETE and authoritative —
+   report it as-is; most questions need nothing more.
+2. **Folder traversal** (the only reliable whole-library read):
+   `/drives/{driveId}/items/{folderItemId}/children`, recursing into anything
+   with a `folder` facet. `/drives/{driveId}/root/children` is allowlist-blocked
+   most of the time (WIQ‑2, unfiled) — enter the tree from the root folder id in
+   the list's drive metadata instead.
+3. **Targeted item read** for a single known item only:
+   `/items/{id}?$expand=fields`. Never sweep an id range one item at a time — it
+   is slow, silently drops items that return 500, and exhausts the turn budget.
+
+**Truncation tripwire — check EVERY list response.** It is truncated if it has
+exactly 100 rows, OR an `@odata.nextLink`, OR 0 rows *with* a nextLink (this
+happens and does NOT mean zero). `$top` is clamped to 100, so asking for 200 and
+getting 100 is truncation, not a total. From a truncated page you MUST NOT report
+its row count as a total, compute a percentage / most / least / max / min, or
+conclude a value does not exist. A result is COMPLETE only when rows < 100 AND no
+`@odata.nextLink`.
+
+**The tool's success flag is not trustworthy.** `fetch` returns `success:true`
+and `isError:false` even when the underlying SharePoint call failed. Inspect
+`structuredContent.results[].statusCode` for every entry: `200` usable; `404`
+absent; `500` transient — retry that single URL once, on its own; `400`
+unsupported shape — read the message, do not reword and retry. When you send N
+`entityUrls`, count the 200s — if fewer than N came back 200 your set is short by
+the difference. Reconcile items counted == requested == returned-200 before
+stating any total.
+
+#### Deliver the answer in the message
+
+The chat message is the deliverable. A file in `/app/created/` is a convenience
+copy, never the answer itself.
+
+- If the user asks for a list, inventory, breakdown, or "all X", the complete
+  table goes in the message body. Do not truncate to a sample or write "see the
+  attached spreadsheet".
+- Only if the result exceeds ~150 rows may you show the first 50 plus every
+  aggregate the user asked for and attach the remainder — and you must say
+  exactly how many rows were omitted and where.
+- Never answer by pointing at an earlier turn. If a follow-up needs a table you
+  already produced, reproduce it. Counts, groupings, and conclusions are always
+  inline; an attachment never substitutes for them.
+
+#### Check your own arithmetic
+
+Before sending any answer that contains both a breakdown and a total: re-derive
+each group count from the final table (not from earlier notes), confirm the
+group counts sum to the stated total, and confirm the total matches the number
+of items you actually retrieved. If they disagree, the table wins — recount and
+correct the summary. Code interpreter is available; for any breakdown over ~20
+rows, prefer computing the tallies in code over counting in prose.
+
+For worked URLs, column resolution, the enumeration ladder, the
+truncation/completeness rules, and the SharePoint error decoder, read
+`references/sharepoint-library-metadata.md`.
+
 ### 🗺️ Known paths — go direct, skip discovery
 
 | Resource | Path root | Common ops |
@@ -275,6 +451,16 @@ Entity tools provide **fast, direct access to specific M365 data** via Work IQ A
 > as a workaround.** Tell the user the path is policy-denied. Currently,
 > `/me/todo/*`, `/me/contacts`, and writes on `/me/outlook/masterCategories` are commonly
 > affected — `search_paths` confirms what's exposed for the connected tenant.
+>
+> **Metadata-only SharePoint read exception:** while executing an explicit
+> document-library column or metadata workflow, an access-denied result for a
+> `/sites/...` or `/drives/...` read can indicate an unsupported URL shape
+> rather than missing user permission. In that metadata workflow only, follow
+> the bounded addressing ladder in
+> `references/sharepoint-library-metadata.md` (at most three total attempts,
+> each materially different). For every non-metadata request, retain the OOB
+> 0817 stop rule. Never broaden into unbounded discovery or retry unrelated
+> policy-denied families.
 
 ### Binary downloads use `fetch_blob`; `upload_blob` is not released
 
@@ -439,6 +625,7 @@ Read the relevant reference file for full parameter details and examples:
 - `references/tasks-work-iq.md` — if you need to list, create, update, complete, or delete Planner tasks
 - `references/teams-work-iq.md` — if you need to send, reply, react, or read Teams chat/channel messages, or get/set presence
 - `references/sharepoint-work-iq.md` — if you need to resolve SharePoint sites, group-backed team sites, document libraries, document search results, or raw SharePoint file content
+- `references/sharepoint-library-metadata.md` — if you need to read, filter, count, group, sort, or enumerate files by SharePoint document-library columns
 - `references/update-entity-work-iq.md` — if you need to update fields on an existing entity
 - `references/delete-entity-work-iq.md` — if you need to delete an entity
 - `references/do-action-work-iq.md` — if you need to send mail, accept/decline meetings, copy/move messages
