@@ -321,15 +321,14 @@ Do not repeatedly rediscover them.
   `/sites/{siteId}/lists/{listId}/columns` before answering about any property.
   If the property is not in that set, no amount of further retrieval will
   produce it.
-- **Absent-field protocol.** If the requested property is absent from
-  `/columns`, or present but empty for every item you examined, your answer
-  MUST: (1) state plainly in the first sentence that the library does not carry
-  it — e.g. "This library does not store sensitivity labels; the `_DisplayName`
-  column is empty for all governed documents."; (2) contain **no** per-file
-  table for that property, not even one illustrative row; (3) name the closest
-  columns that DO exist, labelled as different data, and ask whether the user
-  wants those instead. Stop retrieving once `/columns` has been checked — do not
-  keep searching for a field that is not there.
+- **Absent-field protocol.** Declare a property absent only when `/columns`
+  does not contain it. In that case, state plainly in the first sentence that
+  the library does not carry it, show no per-file table or illustrative row for
+  that property, name nearby columns only when clearly labelled as different
+  data, and ask whether the user wants those instead. If the column exists, say
+  it is empty for every item only after examining a complete candidate set. For
+  partial results, say only that the retrieved items had empty values and
+  identify the coverage limitation.
 - **Never substitute or relabel one field for another.** `Modified` /
   `Modified By` is not checkout state or review activity; `publication.level` is
   not a sensitivity label; `Created` / `Created By` is not an approval record; a
@@ -350,26 +349,34 @@ Do not repeatedly rediscover them.
 This kind of library often holds two populations. State which one you are
 counting every time you give a count or a percentage:
 
-- **GOVERNED** — items that carry the metadata columns (Owner, Department,
-  Review Date, Status, …). Metadata questions are about these.
-- **UNGOVERNED** — items with no metadata columns populated at all.
+- **GOVERNED** — in-scope items that participate in the library's relevant
+  metadata scheme, as shown by one or more of its applicable columns.
+- **UNGOVERNED** — in-scope items with none of those applicable metadata
+  columns populated.
 
-Establish the governed total once per turn before answering
-(`/items?$expand=fields&$filter=fields/Owner ne null`) and quote it: "Of the N
-governed documents, …". Unless the user says "the whole library" or "including
-unclassified", scope metadata questions to GOVERNED. Never merge "field is empty
-for a governed item" (a real gap — report it) with "item is ungoverned" (not a
-gap). Every percentage names its denominator in the same sentence.
+For each query, use `/columns` to resolve the requested display name to its
+internal name and derive the requested criteria from that query. For example,
+`fields/Owner ne null` is appropriate only when the user explicitly asks about
+files with recorded ownership, such as a percentage among files owned by
+particular people or teams; it is not a universal metadata precondition. For a
+Status breakdown, use the resolved Status column rather than Owner and process
+the criteria client-side if Status is not indexed. Unless the user says "the
+whole library" or "including unclassified", scope metadata questions to the
+relevant GOVERNED population. A governed item whose requested field is empty
+remains in that denominator as a real gap; do not silently reclassify it as
+ungoverned. Every percentage names its denominator in the same sentence.
 
 #### Enumerating a library, truncation, and per-result status
 
-The gateway silently caps every page at 100 rows and **always rejects**
-`$skiptoken` (IcM 849663009). Several standard techniques are dead here — do not
-spend calls on them. Each of these is blocked and cannot be made to work by
-rewording:
+The gateway silently caps every page at 100 rows. Follow `@odata.nextLink` when
+the current WorkIQ endpoint accepts it. A continuation call can reject its
+carried `$skiptoken` (IcM 849663009); if that specific rejection occurs, stop
+that paging strategy and use the fallback below. Do not treat the first page as
+complete. Other rejected query shapes cannot be made to work by rewording:
 
 - `$filter=id gt 'N'` → HTTP 500; `$filter=fields/ID gt N` → HTTP 400;
-  `@odata.nextLink` (carries `$skiptoken`) → HTTP 400; `$count=true` → HTTP 400.
+  a rejected `@odata.nextLink` continuation carrying `$skiptoken` → HTTP 400;
+  `$count=true` → HTTP 400.
 
 If you see one of these, the shape is unsupported — do not retry it with
 different quoting, casing, or ordering. Enumerate in this order instead:
@@ -377,23 +384,40 @@ different quoting, casing, or ordering. Enumerate in this order instead:
 1. **Filtered query** (preferred whenever the question has a filter):
    `/items?$expand=fields&$filter=fields/{Col} eq '{Value}'&$top=100`. A result
    under 100 rows with no `@odata.nextLink` is COMPLETE and authoritative —
-   report it as-is; most questions need nothing more.
-2. **Folder traversal** (the only reliable whole-library read):
+   report it as-is; most questions need nothing more. If it has an
+   `@odata.nextLink`, continue with (2).
+2. **Continuation paging:** follow each returned `@odata.nextLink` while the
+   endpoint accepts it. Preserve its opaque continuation parameters. If a
+   continuation specifically fails because `$skiptoken` is rejected, stop this
+   paging strategy and continue with (3).
+3. **Folder traversal** (fallback when continuation paging is rejected):
    `/drives/{driveId}/items/{folderItemId}/children`, recursing into anything
    with a `folder` facet. `/drives/{driveId}/root/children` is allowlist-blocked
    most of the time (WIQ‑2, unfiled) — enter the tree from the root folder id in
-   the list's drive metadata instead.
-3. **Targeted item read** for a single known item only:
+   the list's drive metadata instead. Treat returned drive items as candidate
+   discovery only: obtain each file candidate's list-item identity or
+   relationship through a WorkIQ-supported response or path, then fetch the
+   corresponding list item with `?$expand=fields` before filtering or
+   aggregating metadata. Do not infer column values from drive-item properties.
+   If the relationship cannot be resolved, disclose the limitation instead of
+   claiming a complete metadata result.
+4. **Targeted item read** for a single known item only:
    `/items/{id}?$expand=fields`. Never sweep an id range one item at a time — it
    is slow, silently drops items that return 500, and exhausts the turn budget.
 
-**Truncation tripwire — check EVERY list response.** It is truncated if it has
-exactly 100 rows, OR an `@odata.nextLink`, OR 0 rows *with* a nextLink (this
+**Truncation tripwire — check EVERY list response.** A page is truncated if it
+has exactly 100 rows, OR an `@odata.nextLink`, OR 0 rows *with* a nextLink (this
 happens and does NOT mean zero). `$top` is clamped to 100, so asking for 200 and
-getting 100 is truncation, not a total. From a truncated page you MUST NOT report
-its row count as a total, compute a percentage / most / least / max / min, or
-conclude a value does not exist. A result is COMPLETE only when rows < 100 AND no
-`@odata.nextLink`.
+getting 100 is truncation, not a total. From one truncated page you MUST NOT
+report its row count as a total, compute a percentage / most / least / max /
+min, or conclude a value does not exist. Follow every accepted
+`@odata.nextLink`; the candidate set is COMPLETE only after all pages have been
+retrieved and the final page has fewer than 100 rows with no nextLink. If a
+continuation specifically fails because `$skiptoken` is rejected, use the
+documented folder fallback and keep the result partial unless that fallback
+enumerates and rehydrates the complete candidate set. A request for a metadata
+total, percentage, extrema, or all-empty conclusion requires a complete set and
+therefore overrides the general 2–3-page cap in `references/fetch-work-iq.md`.
 
 **The tool's success flag is not trustworthy.** `fetch` returns `success:true`
 and `isError:false` even when the underlying SharePoint call failed. Inspect

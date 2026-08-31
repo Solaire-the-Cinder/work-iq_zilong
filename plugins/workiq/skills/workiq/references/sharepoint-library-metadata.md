@@ -122,20 +122,19 @@ Before reporting each metadata value:
 
 ### Absent-field protocol
 
-When the requested property is absent from `/columns`, or present but empty for
-every item you examined, the answer MUST:
+Declare the requested property absent only when `/columns` does not contain it.
+In that case:
 
-- state plainly, in the **first sentence**, that the library does not carry it —
-  e.g. “This library does not store sensitivity labels; the `_DisplayName`
-  column is empty for all governed documents.”;
-- contain **no** per-file table for that property, not even one illustrative or
-  example row;
+- state plainly, in the **first sentence**, that the library has no such column;
+- contain **no** per-file table or illustrative row for that property;
 - name the closest columns that DO exist, clearly labelled as different data,
   and ask whether the user wants those instead.
 
-Stop retrieving once `/columns` has been checked. Do not pad the answer with a
-substitute field, and do not invent file names, owners, or values as “examples”;
-to show shape, use a row you actually retrieved and name the item.
+If the column exists, say it is empty for every item only after examining a
+complete candidate set. For partial results, state only that the retrieved
+items had empty values and identify the coverage limitation. Do not pad the
+answer with a substitute field or invent example values; when showing shape for
+another property, use only a row actually retrieved and name the item.
 
 ### Never substitute one field for another
 
@@ -158,17 +157,23 @@ the values read from SharePoint.
 This kind of library often holds two populations, and merging them yields wrong
 denominators:
 
-- **GOVERNED** — items that carry the metadata columns (Owner, Department,
-  Review Date, Status, …). Metadata questions are about these.
-- **UNGOVERNED** — items with no metadata columns populated at all.
+- **GOVERNED** — in-scope items that participate in the library's relevant
+  metadata scheme, as shown by one or more of its applicable columns.
+- **UNGOVERNED** — in-scope items with none of those applicable metadata
+  columns populated.
 
-Establish the governed total once per turn before answering
-(`/items?$expand=fields&$filter=fields/Owner ne null`) and quote it: “Of the N
-governed documents, …”. Unless the user explicitly says “the whole library” or
-“including unclassified”, scope metadata questions to GOVERNED. Never merge
-“field is empty for a governed item” (a real gap) with “item is ungoverned”
-(not a gap); if both are relevant, give both numbers and label them. Every
-percentage names its denominator in the same sentence.
+For each query, use `/columns` to resolve the requested display name to its
+internal name and derive the requested criteria from that query. For example,
+`fields/Owner ne null` is appropriate only when the user explicitly asks about
+files with recorded ownership, such as a percentage among files owned by
+particular people or teams; it is not a universal metadata precondition. For a
+Status breakdown, use the resolved Status column rather than Owner and process
+the criteria client-side if Status is not indexed. Unless the user explicitly
+says “the whole library” or “including unclassified”, scope metadata questions
+to the relevant GOVERNED population. A governed item whose requested field is
+empty remains in that denominator as a real gap; do not silently reclassify it
+as ungoverned. If both populations are relevant, give both numbers and label
+them. Every percentage names its denominator in the same sentence.
 
 ## Filtering and sorting
 
@@ -189,8 +194,10 @@ Field 'X' cannot be referenced in filter or orderby as it is not indexed.
 the values are still readable. Do this:
 
 1. Remove `$filter` or `$orderby`.
-2. Enumerate with `$expand=fields&$top=100`, or by folder traversal if the
-   library exceeds one page (see [Enumerating a library](#enumerating-a-library)).
+2. Enumerate with `$expand=fields&$top=100` and follow accepted
+   `@odata.nextLink` continuations. Use folder traversal only if a continuation
+   specifically fails because `$skiptoken` is rejected (see
+   [Enumerating a library](#enumerating-a-library)).
 3. Filter, sort, count, or group the returned values client-side.
 
 Do not retry cosmetic variants of the rejected query, and do not switch to
@@ -198,22 +205,23 @@ Do not retry cosmetic variants of the rejected query, and do not switch to
 
 ## Enumerating a library
 
-The gateway silently caps every page at 100 rows and **always rejects**
-`$skiptoken` (IcM 849663009), returning:
+The gateway silently caps every page at 100 rows. Follow `@odata.nextLink` when
+the current WorkIQ endpoint accepts it. A continuation call can reject its
+carried `$skiptoken` (IcM 849663009), returning:
 
 ```text
 Query parameter $skip is not permitted. Use $filter instead.
 ```
 
-Several otherwise-standard techniques are therefore dead here. Do not spend
-calls on them — each is blocked at the gateway and cannot be made to work by
-rewording:
+If that specific rejection occurs, stop that paging strategy and use the
+fallback below; do not treat the first page as complete. Other rejected query
+shapes cannot be made to work by rewording:
 
 | Blocked shape | Result |
 |---|---|
 | `$filter=id gt 'N'` | HTTP 500 “General exception while processing” |
 | `$filter=fields/ID gt N` | HTTP 400 type mismatch |
-| `@odata.nextLink` (carries `$skiptoken`) | HTTP 400, `$skip` rejected |
+| Rejected `@odata.nextLink` continuation carrying `$skiptoken` | HTTP 400, `$skip` rejected |
 | `$count=true` | HTTP 400 “$count is not supported on this API” |
 
 If you see one of these, the shape is unsupported; do not retry it with
@@ -226,23 +234,39 @@ different quoting, casing, or ordering. Enumerate in this order instead.
 ```
 
 A filtered result under 100 rows with **no** `@odata.nextLink` is COMPLETE and
-authoritative — report it as-is. Most questions need nothing more. If the column
-is not indexed you get “... cannot be referenced in filter or orderby as it is
-not indexed” — do not retry; fall back to (2) and filter client-side.
+authoritative — report it as-is. Most questions need nothing more. When
+`@odata.nextLink` is present, follow it as described in (2). If the column is
+not indexed you get “... cannot be referenced in filter or orderby as it is not
+indexed” — do not retry the filter; enumerate unfiltered list-item pages and
+process the resolved column client-side.
 
-### 2. Folder traversal (the only reliable whole-library read)
+### 2. Continuation paging
+
+Follow each returned `@odata.nextLink` while the current endpoint accepts it,
+preserving its opaque continuation parameters. If a continuation specifically
+fails because `$skiptoken` is rejected, stop this paging strategy and continue
+with folder traversal.
+
+### 3. Folder traversal (fallback when continuation paging is rejected)
 
 ```text
 /drives/{driveId}/items/{folderItemId}/children
 ```
 
-Recurse depth-first; anything with a `folder` facet is a container. Note that
+Recurse depth-first; anything with a `folder` facet is a container. Treat the
+returned drive items as candidate discovery only. For each file candidate,
+obtain its list-item identity or relationship through a WorkIQ-supported
+response or path, then fetch the corresponding list item with
+`?$expand=fields` before filtering, sorting, counting, or grouping metadata. Do
+not infer column values from drive-item properties. If the relationship cannot
+be resolved, disclose the limitation instead of claiming a complete metadata
+result. Note that
 `/drives/{driveId}/root/children` and `/drives/{driveId}/root:/{path}:/children`
 are allowlist-blocked most of the time (WIQ‑2, unfiled). If you get “Access
 denied for GET path”, do **not** conclude the folder is empty — get the root
 folder item id from the list's drive metadata and enter the tree there.
 
-### 3. Targeted item read (single known item only)
+### 4. Targeted item read (single known item only)
 
 ```text
 /sites/{siteId}/lists/{listId}/items/{id}?$expand=fields
@@ -254,7 +278,7 @@ exhaust the turn budget.
 
 ## Truncation tripwire and completeness
 
-Check EVERY list response. It is TRUNCATED if any of these holds:
+Check EVERY list response. A page is TRUNCATED if any of these holds:
 
 - it contains exactly 100 rows;
 - it contains an `@odata.nextLink`;
@@ -263,12 +287,17 @@ Check EVERY list response. It is TRUNCATED if any of these holds:
 
 `$top` is silently clamped to 100, so asking for 200 and receiving 100 is
 truncation, not a complete result — no field in the response tells you this.
-From a truncated page you MUST NOT report its row count as a total, compute a
+From one truncated page you MUST NOT report its row count as a total, compute a
 percentage / `most` / `least` / max / min, or conclude a value does not exist.
 
-A result is COMPLETE only when rows < 100 AND there is no `@odata.nextLink`.
-Only then may you state a total as fact. When you cannot get a complete set,
-disclose coverage and give the partial figure as a lower bound:
+Follow every `@odata.nextLink` accepted by the current endpoint. The candidate
+set is COMPLETE only after all pages have been retrieved and the final page has
+fewer than 100 rows with no nextLink. If a continuation specifically fails
+because `$skiptoken` is rejected, use folder traversal and keep the result
+partial unless traversal enumerates every candidate and each candidate is
+rehydrated with its list-item `fields`. Only then may you state a total as fact.
+When you cannot get a complete set, disclose coverage and give the partial
+figure as a lower bound:
 
 > Retrieved 115 items by folder traversal; the complete set could not be
 > enumerated, so this is a lower bound.
@@ -276,7 +305,10 @@ disclose coverage and give the partial figure as a lower bound:
 Never present a partial set as a total, and never claim `all`, `earliest`,
 `latest`, or `most` unless the complete candidate set was read. Say “of the N
 items retrieved” instead. Do not use `?$count=true` for the expected total — it
-is rejected (HTTP 400); use folder `childCount` from drive metadata instead.
+is rejected (HTTP 400); use folder `childCount` from drive metadata instead. A
+request for a metadata total, percentage, extrema, or all-empty conclusion
+requires a complete set and therefore overrides the general 2–3-page cap in
+[Fetch](fetch-work-iq.md).
 
 ## Per-result status codes
 
@@ -304,7 +336,7 @@ requested == items returned 200. If those disagree, say so.
 | `Access denied for GET path: /sites/{name}?...` | The site was addressed by name rather than composite id | Resolve `/sites/{host}:/sites/{name}`, then retry once with the returned id |
 | `Access denied for GET path: /drives/{id}/root:/X:/children` or `/drives/{id}/root/children` | Path-addressed template not allowlisted (WIQ‑2, unfiled) | Get the root folder item id from the list's drive metadata, then traverse `/drives/{id}/items/{itemId}/children`. Do not treat the denial as an empty folder |
 | `Access denied` on a SharePoint read | It does not prove the folder is empty or the user lacks permission | Try at most two materially different supported path shapes, then report `could not read` |
-| `Query parameter $skip is not permitted` | `$skip`/`$skiptoken` always rejected (IcM 849663009) | Use folder traversal. Do not id-range page — `$filter=id gt` is also blocked (HTTP 500) |
+| `Query parameter $skip is not permitted` on a continuation call | This continuation's `$skiptoken` was rejected (IcM 849663009) | Stop that paging strategy; use folder traversal with list-item rehydration, and keep the result partial unless traversal produces the complete candidate set. Do not id-range page — `$filter=id gt` is also blocked (HTTP 500) |
 | `Field 'X' cannot be referenced in filter or orderby` | The column is not indexed | Enumerate fields and process client-side |
 | Error on a bare list-item `$select` of custom columns | List columns live under `fields` | Use `$expand=fields($select=...)` |
 | 403 from `call_function` for an ODSP path | The operation is unavailable with current tenant permissions | Stop using `call_function` for this conversation and use `fetch` where supported |
