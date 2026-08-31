@@ -183,9 +183,7 @@ Use the confirmed internal column name in server-side queries.
 /sites/{siteId}/lists/{listId}/items?$expand=fields&$filter=fields/Status%20eq%20%27In%20Progress%27&$top=100
 ```
 
-In this tenant only `Owner` is indexed (DATA-1, indexing half still open), so
-most other columns reject a server-side `$filter`/`$orderby`. When WorkIQ
-returns:
+Indexing varies by library. When WorkIQ returns:
 
 ```text
 Field 'X' cannot be referenced in filter or orderby as it is not indexed.
@@ -207,7 +205,7 @@ Do not retry cosmetic variants of the rejected query, and do not switch to
 
 The gateway silently caps every page at 100 rows. Follow `@odata.nextLink` when
 the current WorkIQ endpoint accepts it. A continuation call can reject its
-carried `$skiptoken` (IcM 849663009), returning:
+carried `$skiptoken`, returning:
 
 ```text
 Query parameter $skip is not permitted. Use $filter instead.
@@ -260,11 +258,11 @@ response or path, then fetch the corresponding list item with
 `?$expand=fields` before filtering, sorting, counting, or grouping metadata. Do
 not infer column values from drive-item properties. If the relationship cannot
 be resolved, disclose the limitation instead of claiming a complete metadata
-result. Note that
+result. If
 `/drives/{driveId}/root/children` and `/drives/{driveId}/root:/{path}:/children`
-are allowlist-blocked most of the time (WIQ‑2, unfiled). If you get “Access
-denied for GET path”, do **not** conclude the folder is empty — get the root
-folder item id from the list's drive metadata and enter the tree there.
+return “Access denied for GET path”, do **not** conclude the folder is empty —
+get the root folder item id from the list's drive metadata and enter the tree
+there.
 
 ### 4. Targeted item read (single known item only)
 
@@ -334,9 +332,9 @@ requested == items returned 200. If those disagree, say so.
 | Error text | Meaning | Correct response |
 |---|---|---|
 | `Access denied for GET path: /sites/{name}?...` | The site was addressed by name rather than composite id | Resolve `/sites/{host}:/sites/{name}`, then retry once with the returned id |
-| `Access denied for GET path: /drives/{id}/root:/X:/children` or `/drives/{id}/root/children` | Path-addressed template not allowlisted (WIQ‑2, unfiled) | Get the root folder item id from the list's drive metadata, then traverse `/drives/{id}/items/{itemId}/children`. Do not treat the denial as an empty folder |
+| `Access denied for GET path: /drives/{id}/root:/X:/children` or `/drives/{id}/root/children` | The path-addressed template was rejected | Get the root folder item id from the list's drive metadata, then traverse `/drives/{id}/items/{itemId}/children`. Do not treat the denial as an empty folder |
 | `Access denied` on a SharePoint read | It does not prove the folder is empty or the user lacks permission | Try at most two materially different supported path shapes, then report `could not read` |
-| `Query parameter $skip is not permitted` on a continuation call | This continuation's `$skiptoken` was rejected (IcM 849663009) | Stop that paging strategy; use folder traversal with list-item rehydration, and keep the result partial unless traversal produces the complete candidate set. Do not id-range page — `$filter=id gt` is also blocked (HTTP 500) |
+| `Query parameter $skip is not permitted` on a continuation call | This continuation's `$skiptoken` was rejected | Stop that paging strategy; use folder traversal with list-item rehydration, and keep the result partial unless traversal produces the complete candidate set. Do not id-range page — `$filter=id gt` is also blocked (HTTP 500) |
 | `Field 'X' cannot be referenced in filter or orderby` | The column is not indexed | Enumerate fields and process client-side |
 | Error on a bare list-item `$select` of custom columns | List columns live under `fields` | Use `$expand=fields($select=...)` |
 | 403 from `call_function` for an ODSP path | The operation is unavailable with current tenant permissions | Stop using `call_function` for this conversation and use `fetch` where supported |

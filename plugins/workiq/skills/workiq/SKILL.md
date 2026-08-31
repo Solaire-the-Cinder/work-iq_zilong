@@ -371,9 +371,9 @@ ungoverned. Every percentage names its denominator in the same sentence.
 
 The gateway silently caps every page at 100 rows. Follow `@odata.nextLink` when
 the current WorkIQ endpoint accepts it. A continuation call can reject its
-carried `$skiptoken` (IcM 849663009); if that specific rejection occurs, stop
-that paging strategy and use the fallback below. Do not treat the first page as
-complete. Other rejected query shapes cannot be made to work by rewording:
+carried `$skiptoken`; if that specific rejection occurs, stop that paging
+strategy and use the fallback below. Do not treat the first page as complete.
+Other rejected query shapes cannot be made to work by rewording:
 
 - `$filter=id gt 'N'` → HTTP 500; `$filter=fields/ID gt N` → HTTP 400;
   a rejected `@odata.nextLink` continuation carrying `$skiptoken` → HTTP 400;
@@ -393,15 +393,15 @@ different quoting, casing, or ordering. Enumerate in this order instead:
    paging strategy and continue with (3).
 3. **Folder traversal** (fallback when continuation paging is rejected):
    `/drives/{driveId}/items/{folderItemId}/children`, recursing into anything
-   with a `folder` facet. `/drives/{driveId}/root/children` is allowlist-blocked
-   most of the time (WIQ‑2, unfiled) — enter the tree from the root folder id in
-   the list's drive metadata instead. Treat returned drive items as candidate
-   discovery only: obtain each file candidate's list-item identity or
-   relationship through a WorkIQ-supported response or path, then fetch the
-   corresponding list item with `?$expand=fields` before filtering or
-   aggregating metadata. Do not infer column values from drive-item properties.
-   If the relationship cannot be resolved, disclose the limitation instead of
-   claiming a complete metadata result.
+   with a `folder` facet. If `/drives/{driveId}/root/children` is rejected,
+   enter the tree from the root folder id returned by the list's drive metadata
+   instead. Treat returned drive items as candidate discovery only: obtain each
+   file candidate's list-item identity or relationship through a
+   WorkIQ-supported response or path, then fetch the corresponding list item
+   with `?$expand=fields` before filtering or aggregating metadata. Do not infer
+   column values from drive-item properties. If the relationship cannot be
+   resolved, disclose the limitation instead of claiming a complete metadata
+   result.
 4. **Targeted item read** for a single known item only:
    `/items/{id}?$expand=fields`. Never sweep an id range one item at a time — it
    is slow, silently drops items that return 500, and exhausts the turn budget.
