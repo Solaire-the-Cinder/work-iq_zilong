@@ -83,11 +83,10 @@ substitute, or relabel another field.
 
 ### 4. Read item fields
 
-`$top` is silently clamped to 100 (see [Enumerating a library](#enumerating-a-library)),
-so `$top=100` is the effective maximum — never rely on a larger page.
+Use a page size accepted by the current tool. `$top=100` is an example request,
+not proof that the response is complete.
 
 Full fields:
-
 ```text
 /sites/{siteId}/lists/{listId}/items?$expand=fields&$top=100
 ```
@@ -122,20 +121,20 @@ Before reporting each metadata value:
 
 ### Absent-field protocol
 
-When the requested property is absent from `/columns`, or present but empty for
-every item you examined, the answer MUST:
+Treat schema absence and empty item values as different findings:
 
-- state plainly, in the **first sentence**, that the library does not carry it —
-  e.g. “This library does not store sensitivity labels; the `_DisplayName`
-  column is empty for all governed documents.”;
-- contain **no** per-file table for that property, not even one illustrative or
-  example row;
-- name the closest columns that DO exist, clearly labelled as different data,
-  and ask whether the user wants those instead.
+- If `/columns` does not contain the requested property, state in the first
+  sentence that the library has no such column. Do not show a per-file table for
+  that property. You may name nearby columns only when clearly labelled as
+  different data and ask whether the user wants one of them instead.
+- If the column exists, report an item as empty only when that item's returned
+  `fields` contains no value for the resolved internal name.
+- Say the column is empty for every item only after retrieving a COMPLETE
+  candidate set. For a partial set, say only that the retrieved items were empty
+  and disclose the coverage limitation.
 
-Stop retrieving once `/columns` has been checked. Do not pad the answer with a
-substitute field, and do not invent file names, owners, or values as “examples”;
-to show shape, use a row you actually retrieved and name the item.
+Do not continue searching for a column that `/columns` proves absent. Do not
+substitute another field or invent example values.
 
 ### Never substitute one field for another
 
@@ -155,172 +154,173 @@ the values read from SharePoint.
 
 ## Scope and denominator
 
-This kind of library often holds two populations, and merging them yields wrong
-denominators:
+Use the population the user requested. By default, that is the target document
+library or folder, not an inferred subset such as items with `Owner` populated.
+If the user explicitly asks for a subset, resolve that subset's column through
+`/columns` and apply it without substituting another field.
 
-- **GOVERNED** — items that carry the metadata columns (Owner, Department,
-  Review Date, Status, …). Metadata questions are about these.
-- **UNGOVERNED** — items with no metadata columns populated at all.
-
-Establish the governed total once per turn before answering
-(`/items?$expand=fields&$filter=fields/Owner ne null`) and quote it: “Of the N
-governed documents, …”. Unless the user explicitly says “the whole library” or
-“including unclassified”, scope metadata questions to GOVERNED. Never merge
-“field is empty for a governed item” (a real gap) with “item is ungoverned”
-(not a gap); if both are relevant, give both numbers and label them. Every
-percentage names its denominator in the same sentence.
+Name the denominator whenever you report a count or percentage. State a total
+or percentage only after retrieving a COMPLETE candidate set. If retrieval is
+partial, report only the number of items retrieved or matched as a lower bound
+and describe what remains unread; never use an unrelated column to manufacture
+a denominator.
 
 ## Filtering and sorting
 
-Use the confirmed internal column name in server-side queries.
+Use the confirmed internal column name in server-side queries. Escape every
+user-controlled OData string literal before URL encoding it: double each
+apostrophe (`O'Brien` becomes `O''Brien`), then URL-encode the complete query
+value.
 
 ```text
 /sites/{siteId}/lists/{listId}/items?$expand=fields&$filter=fields/Status%20eq%20%27In%20Progress%27&$top=100
 ```
 
-In this tenant only `Owner` is indexed (DATA-1, indexing half still open), so
-most other columns reject a server-side `$filter`/`$orderby`. When WorkIQ
-returns:
-
-```text
-Field 'X' cannot be referenced in filter or orderby as it is not indexed.
-```
-
-the values are still readable. Do this:
-
-1. Remove `$filter` or `$orderby`.
-2. Enumerate with `$expand=fields&$top=100`, or by folder traversal if the
-   library exceeds one page (see [Enumerating a library](#enumerating-a-library)).
-3. Filter, sort, count, or group the returned values client-side.
-
-Do not retry cosmetic variants of the rejected query, and do not switch to
-`ask` or KnowledgeSearch.
+If the tool reports that the column cannot be filtered or ordered because it is
+not indexed, do not retry cosmetic variants. Remove the rejected operation,
+retrieve list items and their `fields` through supported paging, then process
+the complete set client-side. If a complete set cannot be retrieved, provide a
+qualified partial result instead of a total, percentage, or extrema claim. Do
+not switch to `ask` or KnowledgeSearch for library-column values.
 
 ## Enumerating a library
 
-The gateway silently caps every page at 100 rows and **always rejects**
-`$skiptoken` (IcM 849663009), returning:
+### 1. Enumerate list items directly
 
 ```text
-Query parameter $skip is not permitted. Use $filter instead.
+/sites/{siteId}/lists/{listId}/items?$expand=fields&$top=100
 ```
 
-Several otherwise-standard techniques are therefore dead here. Do not spend
-calls on them — each is blocked at the gateway and cannot be made to work by
-rewording:
+When a response includes `@odata.nextLink`, it is incomplete. Follow the
+returned continuation in the form accepted by the current `fetch` tool; treat
+it as opaque and do not construct a `$skiptoken` yourself. Continue until no
+next link remains. If the tool rejects the returned continuation, stop paging
+this way and continue with drive traversal below. If traversal is also
+unavailable, report partial coverage rather than trying unsupported pagination
+variants.
 
-| Blocked shape | Result |
-|---|---|
-| `$filter=id gt 'N'` | HTTP 500 “General exception while processing” |
-| `$filter=fields/ID gt N` | HTTP 400 type mismatch |
-| `@odata.nextLink` (carries `$skiptoken`) | HTTP 400, `$skip` rejected |
-| `$count=true` | HTTP 400 “$count is not supported on this API” |
+### 2. Use drive traversal only to discover candidates
 
-If you see one of these, the shape is unsupported; do not retry it with
-different quoting, casing, or ordering. Enumerate in this order instead.
-
-### 1. Filtered query (preferred whenever the question has a filter)
+If list-item paging is unavailable but the host permits drive traversal,
+resolve the library's drive and root item first:
 
 ```text
-/sites/{siteId}/lists/{listId}/items?$expand=fields&$filter=fields/{Col}%20eq%20%27{Value}%27&$top=100
+/sites/{siteId}/lists/{listId}/drive?$expand=root
 ```
 
-A filtered result under 100 rows with **no** `@odata.nextLink` is COMPLETE and
-authoritative — report it as-is. Most questions need nothing more. If the column
-is not indexed you get “... cannot be referenced in filter or orderby as it is
-not indexed” — do not retry; fall back to (2) and filter client-side.
+Use the returned drive `id` and `root.id` as `driveId` and `folderItemId`.
+If the drive response succeeds but does not expand `root`, read
+`/drives/{driveId}/root?$select=id` once to resolve the root item. If that call
+is explicitly policy-denied, stop and report the denial.
+For a group-backed site that was resolved through its group, use the equivalent
+`/groups/{groupId}/drive?$expand=root` route described in
+[SharePoint and OneDrive](sharepoint-work-iq.md).
 
-### 2. Folder traversal (the only reliable whole-library read)
+List folder children with their associated list-item fields when the host
+accepts the nested expansion, and follow every returned continuation:
 
 ```text
-/drives/{driveId}/items/{folderItemId}/children
+/drives/{driveId}/items/{folderItemId}/children?$expand=listItem($expand=fields)
 ```
 
-Recurse depth-first; anything with a `folder` facet is a container. Note that
-`/drives/{driveId}/root/children` and `/drives/{driveId}/root:/{path}:/children`
-are allowlist-blocked most of the time (WIQ‑2, unfiled). If you get “Access
-denied for GET path”, do **not** conclude the folder is empty — get the root
-folder item id from the list's drive metadata and enter the tree there.
+A child is a `driveItem`; it does not by itself provide the document-library
+column values. If the collection rejects the nested expansion, list the children
+without it and request each file candidate's associated `listItem` and fields:
 
-### 3. Targeted item read (single known item only)
+```text
+/drives/{driveId}/items/{driveItemId}/listItem?$expand=fields
+```
+
+If that response supplies a list-item id but not its fields, read the list item
+through the resolved site and list:
+
+```text
+/sites/{siteId}/lists/{listId}/items/{listItemId}?$expand=fields
+```
+
+Use only shapes accepted by the current WorkIQ tool. If the relationship or
+fields cannot be read, disclose that gap; do not filter or aggregate metadata
+from drive-item names, paths, or other facets.
+
+Every child with a `folder` facet is a container. Repeat the children request
+for that folder's item id, exhaust its continuation pages, and continue until
+every discovered subfolder has been traversed. Folder traversal is incomplete
+if any discovered folder or page remains unread.
+
+### 3. Target a single known list item
 
 ```text
 /sites/{siteId}/lists/{listId}/items/{id}?$expand=fields
 ```
 
-Never use this to sweep an id range. Probing ids 1..N one at a time is not
-enumeration — it is slow, it silently drops items that return 500, and it will
-exhaust the turn budget.
+Use this only for a known item, not to probe an id range.
 
-## Truncation tripwire and completeness
+## Completeness rules
 
-Check EVERY list response. It is TRUNCATED if any of these holds:
+A candidate set is COMPLETE only after every page has been retrieved, every
+discovered subfolder has been traversed, and every candidate needed for the
+answer has a successful list-item `fields` response. An `@odata.nextLink`
+always means more pages remain. A page whose row count equals the requested
+`$top` is not, by itself, proof of either completeness or truncation; rely on
+continuation metadata and, when available, a tool-returned count known to cover
+the same scope. For example, a folder's `childCount` applies only when the
+requested scope is exactly that folder's immediate children.
 
-- it contains exactly 100 rows;
-- it contains an `@odata.nextLink`;
-- it contains 0 rows **and** an `@odata.nextLink` (this happens; it does NOT
-  mean zero).
+From an incomplete set, do not state a whole-library total, percentage, most,
+least, earliest, latest, or all-empty conclusion. Report the retrieved coverage
+and give matching counts only as lower bounds. Never present a partial set as
+complete. A request for a count, percentage, extrema, or all-empty conclusion
+requires a complete set and therefore overrides the generic 2-3-page cap in
+[Fetch](fetch-work-iq.md); if exhausting the pages is impractical or blocked,
+return a qualified partial result instead.
 
-`$top` is silently clamped to 100, so asking for 200 and receiving 100 is
-truncation, not a complete result — no field in the response tells you this.
-From a truncated page you MUST NOT report its row count as a total, compute a
-percentage / `most` / `least` / max / min, or conclude a value does not exist.
+### Answer delivery and arithmetic
 
-A result is COMPLETE only when rows < 100 AND there is no `@odata.nextLink`.
-Only then may you state a total as fact. When you cannot get a complete set,
-disclose coverage and give the partial figure as a lower bound:
+Put the requested answer and its coverage qualification in the response. If the
+host supports file artifacts, they may supplement a large result but must not
+replace the answer; do not assume a filesystem path or attachment capability.
 
-> Retrieved 115 items by folder traversal; the complete set could not be
-> enumerated, so this is a lower bound.
-
-Never present a partial set as a total, and never claim `all`, `earliest`,
-`latest`, or `most` unless the complete candidate set was read. Say “of the N
-items retrieved” instead. Do not use `?$count=true` for the expected total — it
-is rejected (HTTP 400); use folder `childCount` from drive metadata instead.
+Before reporting a breakdown and total, recompute each group from the final
+retrieved set, verify that the groups sum to the stated total, and verify that
+the total matches the complete candidate set. Use a computation tool only when
+the current host exposes one; otherwise check the arithmetic directly.
 
 ## Per-result status codes
 
-`fetch` returns `success:true` and `isError:false` even when the underlying
-SharePoint call failed. Inspect `structuredContent.results[].statusCode` for
-every entry in every response:
+Do not rely on an outer success flag when the response also contains per-request
+results. Inspect each returned status and error message.
 
-- `200` — usable.
-- `404` — the item does not exist. Fine when probing; not fine for an item you
-  were told exists.
-- `500` — transient; the item was not read. Retry that single URL once, on its
-  own, before doing anything else.
-- `400` — the query shape is unsupported. Read the message; do not reword and
-  retry blindly.
+For a batched `fetch` containing N explicit `entityUrls`, reconcile N requested
+URLs with N per-URL results. Count successful URLs, recover or disclose failed
+URLs, and never treat a failed URL as an empty entity.
 
-When you send N `entityUrls`, count the 200s. If fewer than N came back 200,
-your data set is short by the difference — recover the item or state how many
-could not be read. Before stating any total, reconcile: items counted == items
-requested == items returned 200. If those disagree, say so.
+For one collection URL, first verify that collection request succeeded. Then
+reason about its returned rows and `@odata.nextLink` separately. Collection rows
+are not requested URLs, so do not compare row count with the number of URLs in
+the batch.
 
-## SharePoint error decoder and bounded retries
+## SharePoint error handling
 
-| Error text | Meaning | Correct response |
-|---|---|---|
-| `Access denied for GET path: /sites/{name}?...` | The site was addressed by name rather than composite id | Resolve `/sites/{host}:/sites/{name}`, then retry once with the returned id |
-| `Access denied for GET path: /drives/{id}/root:/X:/children` or `/drives/{id}/root/children` | Path-addressed template not allowlisted (WIQ‑2, unfiled) | Get the root folder item id from the list's drive metadata, then traverse `/drives/{id}/items/{itemId}/children`. Do not treat the denial as an empty folder |
-| `Access denied` on a SharePoint read | It does not prove the folder is empty or the user lacks permission | Try at most two materially different supported path shapes, then report `could not read` |
-| `Query parameter $skip is not permitted` | `$skip`/`$skiptoken` always rejected (IcM 849663009) | Use folder traversal. Do not id-range page — `$filter=id gt` is also blocked (HTTP 500) |
-| `Field 'X' cannot be referenced in filter or orderby` | The column is not indexed | Enumerate fields and process client-side |
-| Error on a bare list-item `$select` of custom columns | List columns live under `fields` | Use `$expand=fields($select=...)` |
-| 403 from `call_function` for an ODSP path | The operation is unavailable with current tenant permissions | Stop using `call_function` for this conversation and use `fetch` where supported |
-| 500 or `assistant is busy, retry in 120 seconds` | Transient failure | Retry at most twice with backoff, then change strategy or report failure |
+Specific error evidence takes precedence over a generic HTTP status rule:
 
-For one failing target, make at most three attempts total. Each attempt must
-change something material, such as the site addressing mode, folder addressing
-mode, or pagination strategy. After three attempts, mark the target
-unreachable, continue with other independent targets, and disclose the gap.
-
-An error is not an empty value. Never report “the folder is empty” or “there
-are no matching files” solely because a call failed.
+- `Access denied for path: <X>` and `Access denied for GET path: <X>` are
+  explicit policy denials. Stop and report the returned denial; do not
+  re-address the same target or try alternate paths to bypass the policy.
+- If the response identifies a query shape or parameter as unsupported, stop
+  using that shape even when the status is 500. Do not retry different quoting,
+  casing, or ordering unless the error identifies the request formatting as the
+  problem.
+- If a 500 response has no specific unsupported-shape explanation, retry that
+  same target once in isolation. If it still fails, report it as unreadable.
+- If a call fails with no diagnostic detail, check the request format and known
+  identifiers, correct a demonstrated problem if present, and retry once. Do
+  not claim a status code or cause that the tool did not return.
+- A failed call is not an empty folder, absent column, or empty field.
 
 ## Batching
 
-`fetch` accepts at most 50 URLs in one `entityUrls` call. Split larger batches
-into chunks of 50 or fewer. Prefer batching related, known-good reads over
-sequential single-URL calls, but isolate a failing URL when one bad entry causes
-the whole batch to fail.
+Batch related, known-good reads when the current tool schema permits it. Stay
+within any limit reported by the tool or host. If a batch is rejected for size,
+split it into smaller batches; if one target causes a batch failure, isolate
+that target. Apply the per-URL reconciliation rules above to every explicit
+`entityUrls` batch.
