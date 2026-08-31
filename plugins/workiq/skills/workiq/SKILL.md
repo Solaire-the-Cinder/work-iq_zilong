@@ -257,30 +257,180 @@ Entity tools provide **fast, direct access to specific M365 data** via Work IQ A
 
 **Recommended workflow:** for **well-known paths, go direct** — call the read/write tool immediately (use the cheat sheet below). Only fall back to `search_paths` → `get_schema` → tool when the path is genuinely unknown or a write body shape is unfamiliar. Do **not** reflexively run `search_paths`/`get_schema` before every common operation.
 
-### SharePoint document-library metadata
+### 🛑 SharePoint document-library metadata
 
-Use the structured metadata route only when the user explicitly asks about a
-SharePoint document-library column or asks to filter, count, group, sort, or
-compare files by one. Preserve the normal semantic `ask` workflow for content
-questions, including requests about an owner named in document text.
+`ask` and KnowledgeSearch are grounded in document content and embedded file
+properties. They cannot reliably read SharePoint list columns. A PDF may say
+`Document Owner: Sofia Ricci` while its library column says `Owner = HR Team`;
+only the list-item `fields` value answers a library-metadata question.
 
-For a metadata request:
+**OOB-first routing rule:** preserve the OOB 0817 workflow unless the user
+explicitly asks about a SharePoint document-library column or metadata
+attribute, or asks to filter, count, group, sort, find earliest/latest, or
+otherwise compare files by one. Only for those explicit metadata requests, use
+`fetch` on SharePoint list items.
+Typical triggers include Owner, Status, City, State, Region, Classification,
+Document Type, Review Date, Department, Category, and custom columns.
 
-1. Resolve the site and document library.
-2. Read `/columns` and map the requested display name to the returned internal
-   column name. Never assume a custom column exists or infer its internal name.
-3. Read list items with `?$expand=fields`; every reported value must appear in
-   the returned `fields` for that item. `ask`, filenames, paths, and document
-   text are not evidence for a library-column value.
-4. State totals, percentages, extrema, and all-empty conclusions only when the
-   complete candidate set was retrieved. Otherwise label the result as partial
-   and describe its coverage.
-5. If the tool explicitly reports that a path is policy-denied, stop and report
-   that result; do not use alternate addressing to bypass policy.
+- ❌ `ask("Which documents have Owner = Project Team B?")`
+- ✅ `fetch` the library columns and
+  `/sites/{siteId}/lists/{listId}/items?$expand=fields&$top=100`, then filter
+  on the returned `fields` values.
 
-Read `references/sharepoint-library-metadata.md` for the authoritative column
-resolution, OData escaping, paging, drive-item rehydration, completeness, and
-error-handling workflow.
+The OOB semantic-owner workflow remains authoritative by default, including
+when "owner" is part of an exact technical-spec content-summary request. Use
+the structured metadata route only when the user explicitly asks for the
+library `Owner` column, library metadata, or filtering/counting/grouping/
+sorting/comparison by Owner. If both are explicitly requested, fetch the
+library Owner field first and then use `ask` only for the content summary.
+
+`ask` may supplement a metadata answer by summarizing the content of files
+already identified structurally. It must never be the sole source for a
+library-column claim.
+
+`knowledge_search_*` and `ask` return document **text**, never list-column
+metadata. A question about who owns, when reviewed, what status, which
+department, how many, or any column value **cannot** be answered from their
+results, no matter how many times you call them — go to
+`/sites/{siteId}/lists/{listId}/items`. Never decline a metadata question
+because a knowledge search found nothing: that is evidence the wrong tool was
+used, not that the data is absent.
+
+#### Canonical metadata workflow
+
+Given `https://contoso.sharepoint.com/sites/{siteName}/Shared%20Documents`:
+
+1. Resolve the composite site id once:
+   `/sites/contoso.sharepoint.com:/sites/{siteName}`.
+2. Resolve the document library list id once:
+   `/sites/{siteId}/lists?$select=id,name,displayName`.
+3. Read its columns once:
+   `/sites/{siteId}/lists/{listId}/columns?$select=name,displayName,indexed,hidden`.
+4. Read list items with their fields:
+   `/sites/{siteId}/lists/{listId}/items?$expand=fields&$top=100`.
+
+Reuse the site id, list id, and column map for the rest of the conversation.
+Do not repeatedly rediscover them.
+
+#### Metadata grounding and schema rules
+
+- Every metadata value reported for an item must literally appear in a tool
+  result for that item. A filename, path, URL, or related field is not evidence
+  for the requested column.
+- **`/columns` is authoritative for what the library carries.** GET
+  `/sites/{siteId}/lists/{listId}/columns` before answering about any property.
+  If the property is not in that set, no amount of further retrieval will
+  produce it.
+- **Absent-field protocol.** If the requested property is absent from
+  `/columns`, or present but empty for every item you examined, your answer
+  MUST: (1) state plainly in the first sentence that the library does not carry
+  it — e.g. "This library does not store sensitivity labels; the `_DisplayName`
+  column is empty for all governed documents."; (2) contain **no** per-file
+  table for that property, not even one illustrative row; (3) name the closest
+  columns that DO exist, labelled as different data, and ask whether the user
+  wants those instead. Stop retrieving once `/columns` has been checked — do not
+  keep searching for a field that is not there.
+- **Never substitute or relabel one field for another.** `Modified` /
+  `Modified By` is not checkout state or review activity; `publication.level` is
+  not a sensitivity label; `Created` / `Created By` is not an approval record; a
+  date column is not a view or access count. Do not invent file names, owners,
+  or values as "examples" — if you must show shape, use a row you actually
+  retrieved and name the item.
+- Match the user's display name to the column's internal `name` before using
+  `fields/<name>`. Internal names may encode spaces or characters, such as
+  `Review Date` stored as `Review_x0020_Date`.
+- If `$filter` or `$orderby` says a field is not indexed, drop the server-side
+  operation, enumerate with `$expand=fields`, and filter/sort/count/group
+  client-side. Do not retry cosmetic query variants or fall back to `ask`.
+- A failed call is neither an empty result nor an empty field. Report
+  `could not read (call failed)` rather than claiming no files or no value.
+
+#### Scope and denominator
+
+This kind of library often holds two populations. State which one you are
+counting every time you give a count or a percentage:
+
+- **GOVERNED** — items that carry the metadata columns (Owner, Department,
+  Review Date, Status, …). Metadata questions are about these.
+- **UNGOVERNED** — items with no metadata columns populated at all.
+
+Establish the governed total once per turn before answering
+(`/items?$expand=fields&$filter=fields/Owner ne null`) and quote it: "Of the N
+governed documents, …". Unless the user says "the whole library" or "including
+unclassified", scope metadata questions to GOVERNED. Never merge "field is empty
+for a governed item" (a real gap — report it) with "item is ungoverned" (not a
+gap). Every percentage names its denominator in the same sentence.
+
+#### Enumerating a library, truncation, and per-result status
+
+The gateway silently caps every page at 100 rows and **always rejects**
+`$skiptoken` (IcM 849663009). Several standard techniques are dead here — do not
+spend calls on them. Each of these is blocked and cannot be made to work by
+rewording:
+
+- `$filter=id gt 'N'` → HTTP 500; `$filter=fields/ID gt N` → HTTP 400;
+  `@odata.nextLink` (carries `$skiptoken`) → HTTP 400; `$count=true` → HTTP 400.
+
+If you see one of these, the shape is unsupported — do not retry it with
+different quoting, casing, or ordering. Enumerate in this order instead:
+
+1. **Filtered query** (preferred whenever the question has a filter):
+   `/items?$expand=fields&$filter=fields/{Col} eq '{Value}'&$top=100`. A result
+   under 100 rows with no `@odata.nextLink` is COMPLETE and authoritative —
+   report it as-is; most questions need nothing more.
+2. **Folder traversal** (the only reliable whole-library read):
+   `/drives/{driveId}/items/{folderItemId}/children`, recursing into anything
+   with a `folder` facet. `/drives/{driveId}/root/children` is allowlist-blocked
+   most of the time (WIQ‑2, unfiled) — enter the tree from the root folder id in
+   the list's drive metadata instead.
+3. **Targeted item read** for a single known item only:
+   `/items/{id}?$expand=fields`. Never sweep an id range one item at a time — it
+   is slow, silently drops items that return 500, and exhausts the turn budget.
+
+**Truncation tripwire — check EVERY list response.** It is truncated if it has
+exactly 100 rows, OR an `@odata.nextLink`, OR 0 rows *with* a nextLink (this
+happens and does NOT mean zero). `$top` is clamped to 100, so asking for 200 and
+getting 100 is truncation, not a total. From a truncated page you MUST NOT report
+its row count as a total, compute a percentage / most / least / max / min, or
+conclude a value does not exist. A result is COMPLETE only when rows < 100 AND no
+`@odata.nextLink`.
+
+**The tool's success flag is not trustworthy.** `fetch` returns `success:true`
+and `isError:false` even when the underlying SharePoint call failed. Inspect
+`structuredContent.results[].statusCode` for every entry: `200` usable; `404`
+absent; `500` transient — retry that single URL once, on its own; `400`
+unsupported shape — read the message, do not reword and retry. When you send N
+`entityUrls`, count the 200s — if fewer than N came back 200 your set is short by
+the difference. Reconcile items counted == requested == returned-200 before
+stating any total.
+
+#### Deliver the answer in the message
+
+The chat message is the deliverable. A file in `/app/created/` is a convenience
+copy, never the answer itself.
+
+- If the user asks for a list, inventory, breakdown, or "all X", the complete
+  table goes in the message body. Do not truncate to a sample or write "see the
+  attached spreadsheet".
+- Only if the result exceeds ~150 rows may you show the first 50 plus every
+  aggregate the user asked for and attach the remainder — and you must say
+  exactly how many rows were omitted and where.
+- Never answer by pointing at an earlier turn. If a follow-up needs a table you
+  already produced, reproduce it. Counts, groupings, and conclusions are always
+  inline; an attachment never substitutes for them.
+
+#### Check your own arithmetic
+
+Before sending any answer that contains both a breakdown and a total: re-derive
+each group count from the final table (not from earlier notes), confirm the
+group counts sum to the stated total, and confirm the total matches the number
+of items you actually retrieved. If they disagree, the table wins — recount and
+correct the summary. Code interpreter is available; for any breakdown over ~20
+rows, prefer computing the tallies in code over counting in prose.
+
+For worked URLs, column resolution, the enumeration ladder, the
+truncation/completeness rules, and the SharePoint error decoder, read
+`references/sharepoint-library-metadata.md`.
 
 ### 🗺️ Known paths — go direct, skip discovery
 
@@ -301,6 +451,16 @@ error-handling workflow.
 > as a workaround.** Tell the user the path is policy-denied. Currently,
 > `/me/todo/*`, `/me/contacts`, and writes on `/me/outlook/masterCategories` are commonly
 > affected — `search_paths` confirms what's exposed for the connected tenant.
+>
+> **Metadata-only SharePoint read exception:** while executing an explicit
+> document-library column or metadata workflow, an access-denied result for a
+> `/sites/...` or `/drives/...` read can indicate an unsupported URL shape
+> rather than missing user permission. In that metadata workflow only, follow
+> the bounded addressing ladder in
+> `references/sharepoint-library-metadata.md` (at most three total attempts,
+> each materially different). For every non-metadata request, retain the OOB
+> 0817 stop rule. Never broaden into unbounded discovery or retry unrelated
+> policy-denied families.
 
 ### Binary downloads use `fetch_blob`; `upload_blob` is not released
 

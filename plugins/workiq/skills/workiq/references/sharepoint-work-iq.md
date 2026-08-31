@@ -49,10 +49,7 @@ Then list root children with the resolved root id:
 { "entityUrls": ["/drives/{driveId}/items/{rootId}/children"] }
 ```
 
-Resolve the drive and root up front as shown above instead of trying root
-aliases such as `/drives/{driveId}/root/children`. If a canonical request
-returns an explicit policy denial, stop and report it rather than re-addressing
-the same target.
+If a drive root alias such as `/drives/{driveId}/root` or `/drives/{driveId}/root/children` is denied, do not keep retrying root variants. Use `/groups/{groupId}/drive?$expand=root` and `/drives/{driveId}/items/{rootId}/children`.
 
 ## Search SharePoint documents across sites
 
