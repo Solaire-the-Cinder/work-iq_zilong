@@ -5,9 +5,9 @@ files filtered, counted, grouped, sorted, or compared by metadata.
 
 ## Content search and library metadata are different
 
-`ask` and KnowledgeSearch retrieve information from document content and
-embedded file properties. SharePoint document-library columns are list-item
-fields and must be read through `fetch`.
+`ask` and general SharePoint search tools retrieve information from document
+content and embedded file properties. SharePoint document-library columns are
+list-item fields and must be read through `fetch`.
 
 For example, document text may contain `Document Owner: Sofia Ricci` while the
 library's `Owner` column contains `HR Team`. A question about the library column
@@ -201,7 +201,7 @@ the values are still readable. Do this:
 3. Filter, sort, count, or group the returned values client-side.
 
 Do not retry cosmetic variants of the rejected query, and do not switch to
-`ask` or KnowledgeSearch.
+`ask` or general SharePoint search tools.
 
 ## Enumerating a library
 

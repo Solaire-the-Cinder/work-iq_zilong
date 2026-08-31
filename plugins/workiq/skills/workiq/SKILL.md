@@ -259,10 +259,11 @@ Entity tools provide **fast, direct access to specific M365 data** via Work IQ A
 
 ### 🛑 SharePoint document-library metadata
 
-`ask` and KnowledgeSearch are grounded in document content and embedded file
-properties. They cannot reliably read SharePoint list columns. A PDF may say
-`Document Owner: Sofia Ricci` while its library column says `Owner = HR Team`;
-only the list-item `fields` value answers a library-metadata question.
+`ask` and general SharePoint search tools are grounded in document content and
+embedded file properties. They cannot reliably read SharePoint list columns. A
+PDF may say `Document Owner: Sofia Ricci` while its library column says
+`Owner = HR Team`; only the list-item `fields` value answers a
+library-metadata question.
 
 **OOB-first routing rule:** preserve the OOB 0817 workflow unless the user
 explicitly asks about a SharePoint document-library column or metadata
@@ -288,13 +289,13 @@ library Owner field first and then use `ask` only for the content summary.
 already identified structurally. It must never be the sole source for a
 library-column claim.
 
-`knowledge_search_*` and `ask` return document **text**, never list-column
-metadata. A question about who owns, when reviewed, what status, which
-department, how many, or any column value **cannot** be answered from their
-results, no matter how many times you call them — go to
+General SharePoint search tools and `ask` return document **text**, never
+list-column metadata. A question about who owns, when reviewed, what status,
+which department, how many, or any column value **cannot** be answered from
+their results, no matter how many times you call them — go to
 `/sites/{siteId}/lists/{listId}/items`. Never decline a metadata question
-because a knowledge search found nothing: that is evidence the wrong tool was
-used, not that the data is absent.
+because a general SharePoint search found nothing: that is evidence the wrong
+tool was used, not that the data is absent.
 
 #### Canonical metadata workflow
 
