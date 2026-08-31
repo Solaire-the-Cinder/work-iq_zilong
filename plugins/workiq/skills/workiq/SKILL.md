@@ -450,8 +450,9 @@ Before sending any answer that contains both a breakdown and a total: re-derive
 each group count from the final table (not from earlier notes), confirm the
 group counts sum to the stated total, and confirm the total matches the number
 of items you actually retrieved. If they disagree, the table wins — recount and
-correct the summary. Code interpreter is available; for any breakdown over ~20
-rows, prefer computing the tallies in code over counting in prose.
+correct the summary. For any breakdown over ~20 rows, prefer using an available
+code-writing or calculation tool to compute the tallies instead of counting in
+prose.
 
 For worked URLs, column resolution, the enumeration ladder, the
 truncation/completeness rules, and the SharePoint error decoder, read
