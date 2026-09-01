@@ -490,6 +490,50 @@ truncation/completeness rules, and the SharePoint error decoder, read
 > a workaround, and tell the user that the path is policy-denied. Never broaden
 > into unbounded discovery or retry unrelated policy-denied families.
 
+### 🗂️ Reaching a SharePoint or OneDrive file — the working sequence
+
+Files are reachable in **two hops**: resolve the drive, then address items **by id**. Run this
+and structured file reads succeed; it is faster than `ask` and gives you exact metadata.
+
+**Hop 1 — get a `driveId`** (one `fetch`, pick the row that matches your source):
+
+| You have | Call | Keep |
+|---|---|---|
+| A SharePoint site id | `/sites/{siteId}/drive` | its `id` = `driveId` |
+| The user's own OneDrive | `/me/drive` | its `id` = `driveId` |
+| A browser URL | the hostname + site name from it → `/sites/{host}:/sites/{siteName}` → then `/sites/{siteId}/drive` | `siteId`, then `driveId` |
+
+**Hop 2 — address items by id, never by name:**
+
+| Goal | Call |
+|---|---|
+| Find a file by name | `call_function` with `/drives/{driveId}/root/search(q='{urlEncodedExactName}')` — URL-encode the name; this is a function call, not a `fetch` path |
+| List the drive's top level | `/drives/{driveId}/root` → take its `id` → `/drives/{driveId}/items/{id}/children` |
+| List a folder | `/drives/{driveId}/items/{folderId}/children` |
+| Item metadata | `/drives/{driveId}/items/{itemId}` |
+| File bytes | `fetch_blob` `/drives/{driveId}/items/{itemId}/content` |
+
+Two invariants: **a name goes in `q=` of a search, never in a URL segment**, and **every id
+comes from a tool result in this conversation** — never assembled, guessed, or all-zeros.
+
+Within SharePoint drive/item addressing, these variants are **not allowlisted** and fail, so
+skip them and use the sequence above: a pasted browser URL; a folder or library name as a path
+segment (`/sites/{siteId}/Shared%20Documents/...`); a colon path (`/root:/Folder/File`);
+`/root/children` (children hang off `/items/{id}`); and `/sites/{siteId}/drive/items/...`,
+which is a lookup rather than a prefix — switch to `/drives/{driveId}/...`.
+
+Prefer the drive-scoped `/drives/{driveId}/items/...` form for SharePoint content. The
+`/me/drive/...` forms remain the documented OneDrive convention (see
+`references/fetch-blob-work-iq.md` and `references/call-function-work-iq.md`); they are
+unreliable for SharePoint-hosted items, not invalid everywhere.
+
+**Anything else — discover, never guess.** For a `/sites/` or `/drives/` path not covered
+above, or on any `Access denied` this section does not cover, call `search_paths` once
+(`filter` is a required regex, e.g. `sites|drives`) and use only a `uriTemplate` it returned.
+Re-sending a denied shape with a different folder, `$select`, or casing fails identically.
+Cache the templates and reuse them.
+
+
 ### Binary downloads use `fetch_blob`; `upload_blob` is not released
 
 Use `fetch_blob` for file content in OneDrive/SharePoint, attachment payloads for messages, calendar events, and profile photos. It accepts a relative WorkIQ `path`, returns up to 4 MB as base64 with content metadata, and supports an optional `format` conversion value on compatible drive-content endpoints. Use `fetch` first only when you need to resolve an item or attachment ID. You should also help the user decode the base64 into a file with the correct extension and MIME type if needed.
