@@ -484,9 +484,11 @@ truncation/completeness rules, and the SharePoint error decoder, read
 > rather than missing user permission. In that metadata workflow only, follow
 > the bounded addressing ladder in
 > `references/sharepoint-library-metadata.md` (at most three total attempts,
-> each materially different). For every non-metadata request, retain the OOB
-> 0817 stop rule. Never broaden into unbounded discovery or retry unrelated
-> policy-denied families.
+> each materially different). For every non-metadata request, follow the
+> immediately preceding **Server may deny families by policy** rule: stop after
+> the denied call, do not retry or switch to another path, do not call `ask` as
+> a workaround, and tell the user that the path is policy-denied. Never broaden
+> into unbounded discovery or retry unrelated policy-denied families.
 
 ### Binary downloads use `fetch_blob`; `upload_blob` is not released
 
